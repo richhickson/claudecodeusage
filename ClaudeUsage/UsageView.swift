@@ -99,6 +99,17 @@ struct UsageView: View {
                     color: colorForPercentage(sonnetPct)
                 )
             }
+
+            // Extra usage allowance (if enabled)
+            if let extra = usage.extraUsage {
+                UsageRow(
+                    title: "Extra Allowance",
+                    subtitle: "\(extra.formattedUsed) / \(extra.formattedLimit) included",
+                    percentage: extra.percentage,
+                    resetsAt: nil,
+                    color: colorForPercentage(extra.percentage)
+                )
+            }
         }
         .padding()
     }
@@ -339,6 +350,8 @@ struct UsageRow: View {
     }
 }
 
+#if canImport(PreviewsMacros)
 #Preview {
     UsageView(manager: UsageManager())
 }
+#endif

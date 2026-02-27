@@ -8,10 +8,22 @@ struct UsageData {
     let weeklyResetsAt: Date?
     let sonnetUtilization: Double?
     let sonnetResetsAt: Date?
+    let extraUsage: ExtraUsageData?
 
     var sessionPercentage: Int { Int(sessionUtilization) }
     var weeklyPercentage: Int { Int(weeklyUtilization) }
     var sonnetPercentage: Int? { sonnetUtilization.map { Int($0) } }
+}
+
+struct ExtraUsageData {
+    let isEnabled: Bool
+    let monthlyLimitCents: Double
+    let usedCreditsCents: Double
+    let utilization: Double
+
+    var percentage: Int { Int(utilization) }
+    var formattedUsed: String { String(format: "$%.2f", usedCreditsCents / 100) }
+    var formattedLimit: String { String(format: "$%.0f", monthlyLimitCents / 100) }
 }
 
 @MainActor
@@ -82,9 +94,42 @@ class UsageManager: ObservableObject {
         return try getClaudeCodeToken()
     }
 
-    /// Get token from Claude Code's keychain using security CLI (avoids ACL prompt!)
+    /// Get token from Claude Code's credentials file or keychain
     private func getClaudeCodeToken() throws -> String {
-        // Use security CLI which is already in the keychain ACL
+        // 1. Try ~/.claude/.credentials.json first (always has complete JSON)
+        if let token = try? getTokenFromCredentialsFile() {
+            return token
+        }
+
+        // 2. Try keychain with regex extraction (handles truncated JSON)
+        if let token = try? getTokenFromKeychain() {
+            return token
+        }
+
+        // 3. Try alternate keychain entry
+        if let token = try? getAccessTokenFromAlternateKeychain() {
+            return token
+        }
+
+        throw KeychainError.notLoggedIn
+    }
+
+    /// Read token from ~/.claude/.credentials.json
+    private func getTokenFromCredentialsFile() throws -> String {
+        let homeDir = FileManager.default.homeDirectoryForCurrentUser
+        let credPath = homeDir.appendingPathComponent(".claude/.credentials.json")
+
+        let data = try Data(contentsOf: credPath)
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let oauth = json["claudeAiOauth"] as? [String: Any],
+              let accessToken = oauth["accessToken"] as? String else {
+            throw KeychainError.invalidCredentialFormat
+        }
+        return accessToken
+    }
+
+    /// Get token from keychain using regex (handles truncated JSON from large credentials)
+    private func getTokenFromKeychain() throws -> String {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
         process.arguments = ["find-generic-password", "-s", "Claude Code-credentials", "-w"]
@@ -101,46 +146,34 @@ class UsageManager: ObservableObject {
             throw KeychainError.unexpectedError(status: -1)
         }
 
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
-        let errorString = String(data: errorData, encoding: .utf8) ?? ""
-
         guard process.terminationStatus == 0 else {
-            // Try alternate keychain entry as fallback
-            if let token = try? getAccessTokenFromAlternateKeychain() {
-                return token
-            }
-            // Include error detail for debugging
+            let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+            let errorString = String(data: errorData, encoding: .utf8) ?? ""
             if errorString.contains("could not be found") {
                 throw KeychainError.notLoggedIn
             }
             throw KeychainError.securityCommandFailed(errorString.isEmpty ? "Exit code \(process.terminationStatus)" : errorString)
         }
 
-        guard let jsonString = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !jsonString.isEmpty else {
-            if let token = try? getAccessTokenFromAlternateKeychain() {
-                return token
-            }
+        guard let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+              !output.isEmpty else {
             throw KeychainError.notLoggedIn
         }
 
-        // Try to parse as OAuth credentials
-        if let jsonData = jsonString.data(using: .utf8),
-           let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] {
-            // Check for claudeAiOauth structure
-            if let oauth = json["claudeAiOauth"] as? [String: Any],
-               let accessToken = oauth["accessToken"] as? String {
-                return accessToken
-            }
-            // Show what keys ARE present for debugging
-            let keys = Array(json.keys).joined(separator: ", ")
-            throw KeychainError.missingOAuthToken(availableKeys: keys)
+        // Try full JSON parse first
+        if let jsonData = output.data(using: .utf8),
+           let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
+           let oauth = json["claudeAiOauth"] as? [String: Any],
+           let accessToken = oauth["accessToken"] as? String {
+            return accessToken
         }
 
-        // Primary entry doesn't have OAuth - try alternate keychain
-        if let token = try? getAccessTokenFromAlternateKeychain() {
-            return token
+        // JSON may be truncated (keychain stores large credentials incompletely).
+        // Extract token with regex since accessToken is near the start.
+        if let range = output.range(of: #""accessToken"\s*:\s*"([^"]+)""#, options: .regularExpression),
+           let tokenRange = output[range].range(of: #"(?<=")[^"]+(?="[^"]*$)"#, options: .regularExpression) {
+            return String(output[tokenRange])
         }
 
         throw KeychainError.invalidCredentialFormat
@@ -206,13 +239,25 @@ class UsageManager: ObservableObject {
         let sevenDay = json["seven_day"] as? [String: Any]
         let sonnetOnly = json["sonnet_only"] as? [String: Any]
 
+        var extraUsage: ExtraUsageData? = nil
+        if let extra = json["extra_usage"] as? [String: Any],
+           let isEnabled = extra["is_enabled"] as? Bool, isEnabled {
+            extraUsage = ExtraUsageData(
+                isEnabled: isEnabled,
+                monthlyLimitCents: extra["monthly_limit"] as? Double ?? 0,
+                usedCreditsCents: extra["used_credits"] as? Double ?? 0,
+                utilization: extra["utilization"] as? Double ?? 0
+            )
+        }
+
         return UsageData(
             sessionUtilization: fiveHour?["utilization"] as? Double ?? 0,
             sessionResetsAt: parseDate(fiveHour?["resets_at"] as? String),
             weeklyUtilization: sevenDay?["utilization"] as? Double ?? 0,
             weeklyResetsAt: parseDate(sevenDay?["resets_at"] as? String),
             sonnetUtilization: sonnetOnly?["utilization"] as? Double,
-            sonnetResetsAt: parseDate(sonnetOnly?["resets_at"] as? String)
+            sonnetResetsAt: parseDate(sonnetOnly?["resets_at"] as? String),
+            extraUsage: extraUsage
         )
     }
 
