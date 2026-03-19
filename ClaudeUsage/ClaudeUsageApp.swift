@@ -105,9 +105,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         guard let button = statusItem?.button else { return }
 
         if let usage = usageManager.usage {
-            let sessionPct = usage.sessionPercentage
             let emoji = usageManager.statusEmoji
-            button.title = "\(emoji) \(sessionPct)%"
+            if usage.extraUsageEnabled, let used = usage.extraUsageUsedCredits {
+                button.title = "\(emoji) $\(String(format: "%.0f", used / 100))"
+            } else {
+                button.title = "\(emoji) \(usage.sessionPercentage)%"
+            }
         } else if usageManager.error != nil {
             button.title = "❌"
         } else {

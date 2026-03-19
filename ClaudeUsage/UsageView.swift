@@ -71,42 +71,40 @@ struct UsageView: View {
     @ViewBuilder
     func usageContent(_ usage: UsageData) -> some View {
         VStack(spacing: 16) {
-            // Session usage
-            UsageRow(
-                title: "Session",
-                subtitle: "5-hour window",
-                percentage: usage.sessionPercentage,
-                resetsAt: usage.sessionResetsAt,
-                color: colorForPercentage(usage.sessionPercentage)
-            )
-            
-            // Weekly usage
-            UsageRow(
-                title: "Weekly",
-                subtitle: "7-day window",
-                percentage: usage.weeklyPercentage,
-                resetsAt: usage.weeklyResetsAt,
-                color: colorForPercentage(usage.weeklyPercentage)
-            )
-            
-            // Sonnet only (if available)
-            if let sonnetPct = usage.sonnetPercentage {
-                UsageRow(
-                    title: "Sonnet Only",
-                    subtitle: "Model-specific",
-                    percentage: sonnetPct,
-                    resetsAt: usage.sonnetResetsAt,
-                    color: colorForPercentage(sonnetPct)
-                )
-            }
-
-            // Extra usage / overage (if enabled)
             if usage.extraUsageEnabled, let limit = usage.extraUsageMonthlyLimit, let used = usage.extraUsageUsedCredits {
+                // Enterprise: spend row only
                 OverageRow(
                     usedDollars: used / 100,
                     limitDollars: limit / 100,
                     percentage: usage.extraUsagePercentage ?? 0
                 )
+            } else {
+                // Non-enterprise: rate-limit rows
+                UsageRow(
+                    title: "Session",
+                    subtitle: "5-hour window",
+                    percentage: usage.sessionPercentage,
+                    resetsAt: usage.sessionResetsAt,
+                    color: colorForPercentage(usage.sessionPercentage)
+                )
+
+                UsageRow(
+                    title: "Weekly",
+                    subtitle: "7-day window",
+                    percentage: usage.weeklyPercentage,
+                    resetsAt: usage.weeklyResetsAt,
+                    color: colorForPercentage(usage.weeklyPercentage)
+                )
+
+                if let sonnetPct = usage.sonnetPercentage {
+                    UsageRow(
+                        title: "Sonnet Only",
+                        subtitle: "Model-specific",
+                        percentage: sonnetPct,
+                        resetsAt: usage.sonnetResetsAt,
+                        color: colorForPercentage(sonnetPct)
+                    )
+                }
             }
         }
         .padding()
