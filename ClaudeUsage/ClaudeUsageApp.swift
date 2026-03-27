@@ -1,5 +1,6 @@
 import SwiftUI
 import Combine
+import AppKit
 
 @main
 struct ClaudeUsageApp: App {
@@ -19,6 +20,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var usageManager = UsageManager()
     var timer: Timer?
     var cancellables = Set<AnyCancellable>()
+    var iconStyle: MenubarIconStyle {
+        let raw = UserDefaults.standard.string(forKey: "menubarIconStyle") ?? MenubarIconStyle.spark.rawValue
+        return MenubarIconStyle(rawValue: raw) ?? .spark
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Hide dock icon - menubar only
@@ -48,6 +53,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             .store(in: &cancellables)
 
         usageManager.$error
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.updateStatusItem() }
+            .store(in: &cancellables)
+
+        // Re-render icon when user switches icon style in preferences
+        NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.updateStatusItem() }
             .store(in: &cancellables)
@@ -106,11 +117,23 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         if let usage = usageManager.usage {
             let sessionPct = usage.sessionPercentage
-            let emoji = usageManager.statusEmoji
-            button.title = "\(emoji) \(sessionPct)%"
+            let utilization = usageManager.statusUtilization
+            let color = StatusIcon.color(forUtilization: utilization)
+
+            if let icon = StatusIcon.menubarIcon(style: iconStyle, color: color) {
+                button.image = icon
+                button.imagePosition = .imageLeft
+                button.title = " \(sessionPct)%"
+            } else {
+                // Fallback to emoji if image loading fails
+                button.image = nil
+                button.title = "\(usageManager.statusEmoji) \(sessionPct)%"
+            }
         } else if usageManager.error != nil {
+            button.image = nil
             button.title = "❌"
         } else {
+            button.image = nil
             button.title = "⏳"
         }
     }
