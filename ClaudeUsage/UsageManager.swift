@@ -68,6 +68,11 @@ class UsageManager: ObservableObject {
         return "🟢"
     }
 
+    var statusUtilization: Double {
+        guard let usage = usage else { return 0 }
+        return max(usage.sessionUtilization, usage.weeklyUtilization)
+    }
+
     func refresh() async {
         await refreshWithRetry(retriesRemaining: 5)
     }

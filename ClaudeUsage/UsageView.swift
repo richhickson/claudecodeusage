@@ -5,6 +5,7 @@ import ServiceManagement
 struct UsageView: View {
     @ObservedObject var manager: UsageManager
     @Environment(\.openURL) var openURL
+    @AppStorage("menubarIconStyle") private var iconStyleRaw: String = MenubarIconStyle.spark.rawValue
     @State private var launchAtLogin: Bool = {
         if #available(macOS 13.0, *) {
             return SMAppService.mainApp.status == .enabled
@@ -185,6 +186,14 @@ struct UsageView: View {
             .buttonStyle(.borderless)
             .font(.caption)
             .padding(.top, 8)
+
+            Picker("Icon", selection: $iconStyleRaw) {
+                ForEach(MenubarIconStyle.allCases, id: \.rawValue) { style in
+                    Text(style.displayName).tag(style.rawValue)
+                }
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal)
 
             Toggle("Launch at Login", isOn: $launchAtLogin)
                 .toggleStyle(.checkbox)
