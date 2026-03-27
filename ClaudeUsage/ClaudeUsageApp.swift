@@ -17,6 +17,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem?
     var popover: NSPopover?
     var usageManager = UsageManager()
+    var statusManager = StatusManager()
     var timer: Timer?
     var cancellables = Set<AnyCancellable>()
 
@@ -51,19 +52,29 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.updateStatusItem() }
             .store(in: &cancellables)
+
+        statusManager.$disruptions
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.updateStatusItem() }
+            .store(in: &cancellables)
     }
 
     @objc func handleWake() {
         // Delay refresh after wake to allow keychain to unlock
         Task {
             try? await Task.sleep(nanoseconds: 3_000_000_000) // 3 seconds
+            async let statusRefresh: () = statusManager.refresh()
             await usageManager.refresh()
+            _ = await statusRefresh
         }
     }
 
     func startFetching() {
         // Initial fetch and update check
         Task {
+            // Status fetch can run immediately (no auth needed)
+            async let statusFetch: () = statusManager.refresh()
+
             // If system recently booted (within 60 seconds), wait before accessing keychain
             // The keychain/login system takes time to be fully available after boot
             let uptime = ProcessInfo.processInfo.systemUptime
@@ -74,12 +85,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
             await usageManager.refresh()
             await usageManager.checkForUpdates()
+            _ = await statusFetch
         }
 
         // Refresh every 5 minutes
         timer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
             Task { @MainActor in
+                async let statusRefresh: () = self?.statusManager.refresh() ?? ()
                 await self?.usageManager.refresh()
+                _ = await statusRefresh
             }
         }
     }
@@ -98,7 +112,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         popover = NSPopover()
         popover?.contentSize = NSSize(width: 280, height: 320)
         popover?.behavior = .transient
-        popover?.contentViewController = NSHostingController(rootView: UsageView(manager: usageManager))
+        popover?.contentViewController = NSHostingController(rootView: UsageView(manager: usageManager, statusManager: statusManager))
     }
     
     func updateStatusItem() {
@@ -107,11 +121,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if let usage = usageManager.usage {
             let sessionPct = usage.sessionPercentage
             let emoji = usageManager.statusEmoji
-            button.title = "\(emoji) \(sessionPct)%"
+            var title = "\(emoji) \(sessionPct)%"
+            if let badge = statusManager.badgeEmoji {
+                title += " \(badge)"
+            }
+            button.title = title
         } else if usageManager.error != nil {
-            button.title = "❌"
+            var title = "❌"
+            if let badge = statusManager.badgeEmoji { title += " \(badge)" }
+            button.title = title
         } else {
-            button.title = "⏳"
+            var title = "⏳"
+            if let badge = statusManager.badgeEmoji { title += " \(badge)" }
+            button.title = title
         }
     }
     

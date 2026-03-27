@@ -11,6 +11,7 @@
 		002 /* UsageManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 102 /* UsageManager.swift */; };
 		003 /* UsageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 103 /* UsageView.swift */; };
 		004 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 104 /* Assets.xcassets */; };
+		005 /* StatusManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 106 /* StatusManager.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -20,6 +21,7 @@
 		103 /* UsageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageView.swift; sourceTree = "<group>"; };
 		104 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		105 /* ClaudeUsage.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = ClaudeUsage.entitlements; sourceTree = "<group>"; };
+		106 /* StatusManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusManager.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -45,6 +47,7 @@
 			isa = PBXGroup;
 			children = (
 				101 /* ClaudeUsageApp.swift */,
+				106 /* StatusManager.swift */,
 				102 /* UsageManager.swift */,
 				103 /* UsageView.swift */,
 				104 /* Assets.xcassets */,
@@ -131,6 +134,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				001 /* ClaudeUsageApp.swift in Sources */,
+				005 /* StatusManager.swift in Sources */,
 				002 /* UsageManager.swift in Sources */,
 				003 /* UsageView.swift in Sources */,
 			);

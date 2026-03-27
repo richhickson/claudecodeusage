@@ -4,6 +4,7 @@ import ServiceManagement
 
 struct UsageView: View {
     @ObservedObject var manager: UsageManager
+    @ObservedObject var statusManager: StatusManager
     @Environment(\.openURL) var openURL
     @State private var launchAtLogin: Bool = {
         if #available(macOS 13.0, *) {
@@ -60,6 +61,17 @@ struct UsageView: View {
                 loadingView()
             }
             
+            // Service disruptions (shown in all states)
+            if !statusManager.disruptions.isEmpty {
+                VStack(spacing: 8) {
+                    ForEach(statusManager.disruptions, id: \.name) { disruption in
+                        DisruptionRow(disruption: disruption)
+                    }
+                }
+                .padding(.horizontal)
+                .padding(.vertical, 8)
+            }
+
             Divider()
             
             // Footer
@@ -404,6 +416,71 @@ struct OverageRow: View {
     }
 }
 
+struct DisruptionRow: View {
+    let disruption: ComponentDisruption
+    @Environment(\.openURL) var openURL
+
+    private var color: Color {
+        switch disruption.status {
+        case "major_outage", "partial_outage":
+            return .red
+        default:
+            return .orange
+        }
+    }
+
+    private var displayStatus: String {
+        switch disruption.status {
+        case "degraded_performance":
+            return "degraded"
+        case "major_outage":
+            return "major outage"
+        case "partial_outage":
+            return "partial outage"
+        case "under_maintenance":
+            return "maintenance"
+        default:
+            return disruption.status
+        }
+    }
+
+    private var emoji: String {
+        switch disruption.status {
+        case "major_outage", "partial_outage":
+            return "🔥"
+        default:
+            return "⚠️"
+        }
+    }
+
+    var body: some View {
+        Button(action: {
+            openURL(URL(string: "https://status.claude.com")!)
+        }) {
+            HStack {
+                Text("\(emoji) \(disruption.name)")
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                Spacer()
+                Text(displayStatus)
+                    .font(.caption)
+                    .foregroundColor(color)
+            }
+            .padding(12)
+            .background(Color(NSColor.controlBackgroundColor))
+            .cornerRadius(8)
+            .overlay(
+                Rectangle()
+                    .fill(color)
+                    .frame(width: 3),
+                alignment: .leading
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+        }
+        .buttonStyle(.plain)
+    }
+}
+
 #Preview {
-    UsageView(manager: UsageManager())
+    UsageView(manager: UsageManager(), statusManager: StatusManager())
 }
