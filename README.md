@@ -14,11 +14,12 @@ Built by [@richhickson](https://x.com/richhickson)
 - 📊 **Session, Weekly & per-model limits** - including model-scoped weekly caps (e.g. Fable/Opus) as Anthropic rolls them out
 - 💵 **Overage tracking** - extra-usage spend against your monthly limit
 - 🚦 **Color-coded status** - Green (OK), Yellow (>70%), Red (>90%)
+- 🎨 **Menu bar styles** - Native (monochrome template icon, colors only when a limit runs hot), Tinted (icon colored by usage), or classic Emoji — plus your choice of metric (session/weekly/model %, spend, or icon only)
 - ⏱️ **Time until reset** for each limit
 - 🔄 **Auto-refresh** every 5 minutes, with retry on network/keychain hiccups and refresh on wake from sleep
 
 ### Session alerts (opt-in)
-- 🔔 **Menu bar bell** with a count when Claude Code sessions are waiting for your permission or input
+- 🔔 **Menu bar bell** naming the project that's waiting for your permission or input (a count when several are)
 - 💬 **macOS notifications** when a session needs you - with an on/off toggle, permission status, and a test button
 - 📋 **Live session list** in the popover: needs you 🔔 / working ⚙️ / finished ✅
 - 🖱️ **Click-to-focus** - click a session (or its notification) to jump to the exact Terminal/iTerm2 tab it's running in; alerts clear once you've visited the session
