@@ -70,12 +70,17 @@ class UsageManager: ObservableObject {
         return URLSession(configuration: config)
     }()
 
-    var statusEmoji: String {
-        guard let usage = usage else { return "❓" }
+    /// Highest utilization across session, weekly, and model-scoped limits
+    var maxUtilization: Double {
+        guard let usage = usage else { return 0 }
         let maxModelUtil = usage.modelLimits.map(\.utilization).max() ?? 0
-        let maxUtil = max(usage.sessionUtilization, usage.weeklyUtilization, maxModelUtil)
-        if maxUtil >= 90 { return "🔴" }
-        if maxUtil >= 70 { return "🟡" }
+        return max(usage.sessionUtilization, usage.weeklyUtilization, maxModelUtil)
+    }
+
+    var statusEmoji: String {
+        guard usage != nil else { return "❓" }
+        if maxUtilization >= 90 { return "🔴" }
+        if maxUtilization >= 70 { return "🟡" }
         return "🟢"
     }
 

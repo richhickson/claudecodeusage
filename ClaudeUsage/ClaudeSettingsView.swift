@@ -91,202 +91,226 @@ struct ClaudeSettingsView: View {
     @ObservedObject var statusMonitor: StatusMonitor
     @StateObject private var config = ClaudeConfigManager()
     @State private var alertsEnabled = false
+    @State private var menuBarStyle = MenuBarAppearance.style
+    @State private var menuBarMetric = MenuBarAppearance.metric
+    @Environment(\.openURL) var openURL
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // Header
-            HStack {
-                Image(systemName: "gearshape.fill")
-                    .foregroundColor(.accentColor)
-                Text("Claude Code Settings")
-                    .font(.headline)
-                Spacer()
+        VStack(spacing: 0) {
+            Form {
+                menuBarSection
+                sessionAlertsSection
+                statusAlertsSection
+                retentionSection
+                claudeMdSection
             }
-            .padding()
-            .background(Color(NSColor.controlBackgroundColor))
+            .formStyle(.grouped)
 
             Divider()
-
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    // Session alerts (hooks in settings.json)
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Session Alerts")
-                            .font(.subheadline)
-                            .fontWeight(.semibold)
-                        Text("Get a 🔔 in the menu bar and a macOS notification when a Claude Code session is waiting for your permission or input. Installs status hooks into ~/.claude/settings.json (your other settings and hooks are preserved). Takes effect for newly started Claude Code sessions.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-
-                        Toggle("Alert when a session needs attention", isOn: $alertsEnabled)
-                            .toggleStyle(.switch)
-                            .onChange(of: alertsEnabled) { newValue in
-                                guard newValue != sessionMonitor.hooksInstalled else { return }
-                                do {
-                                    try sessionMonitor.setEnabled(newValue)
-                                    config.statusMessage = newValue
-                                        ? "Saved: session hooks installed"
-                                        : "Saved: session hooks removed"
-                                } catch {
-                                    alertsEnabled = !newValue
-                                    config.statusMessage = "Failed: \(error.localizedDescription)"
-                                }
-                            }
-
-                        if alertsEnabled {
-                            Toggle("Show notification pop-ups", isOn: Binding(
-                                get: { sessionMonitor.popupNotificationsEnabled },
-                                set: { sessionMonitor.popupNotificationsEnabled = $0 }
-                            ))
-                            .toggleStyle(.switch)
-                            .padding(.leading, 16)
-
-                            VStack(alignment: .leading, spacing: 4) {
-                                switch sessionMonitor.notificationsAuthorized {
-                                case false:
-                                    Label("Notifications for ClaudeUsage are turned off in System Settings", systemImage: "bell.slash.fill")
-                                        .font(.caption)
-                                        .foregroundColor(.orange)
-                                    Button("Open Notification Settings") {
-                                        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.notifications")!)
-                                    }
-                                    .font(.caption)
-                                case nil:
-                                    Label("Notification permission not granted yet", systemImage: "bell.badge")
-                                        .font(.caption)
-                                        .foregroundColor(.orange)
-                                    Button("Request Permission") {
-                                        sessionMonitor.requestNotificationPermission()
-                                    }
-                                    .font(.caption)
-                                default:
-                                    Label("Notifications allowed", systemImage: "bell.fill")
-                                        .font(.caption)
-                                        .foregroundColor(.green)
-                                    Button("Send Test Notification") {
-                                        sessionMonitor.sendTestNotification()
-                                    }
-                                    .font(.caption)
-                                }
-
-                                if let error = sessionMonitor.notificationError {
-                                    Text("Permission error: \(error)")
-                                        .font(.caption)
-                                        .foregroundColor(.red)
-                                        .fixedSize(horizontal: false, vertical: true)
-                                }
-                            }
-                            .padding(.leading, 16)
-                        }
-                    }
-
-                    Divider()
-
-                    // Claude service status alerts
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Claude Status Alerts")
-                            .font(.subheadline)
-                            .fontWeight(.semibold)
-                        Text("Get a notification when status.claude.com reports an outage — and when service recovers. Checked every 5 minutes.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-
-                        Toggle("Alert when Claude status changes", isOn: Binding(
-                            get: { statusMonitor.alertsEnabled },
-                            set: { statusMonitor.alertsEnabled = $0 }
-                        ))
-                        .toggleStyle(.switch)
-                    }
-
-                    Divider()
-
-                    // Conversation retention (settings.json)
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Conversation Retention")
-                            .font(.subheadline)
-                            .fontWeight(.semibold)
-                        Text("How long Claude Code keeps local conversation transcripts (cleanupPeriodDays in ~/.claude/settings.json). Leave empty for the default of 30 days.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-
-                        HStack {
-                            TextField("30", text: $config.cleanupPeriodDays)
-                                .textFieldStyle(.roundedBorder)
-                                .frame(width: 80)
-                            Text("days")
-                                .foregroundColor(.secondary)
-                            Button("Save") {
-                                config.saveCleanupPeriod()
-                            }
-                        }
-                    }
-
-                    Divider()
-
-                    // Working preferences (CLAUDE.md)
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("How You Like to Work")
-                            .font(.subheadline)
-                            .fontWeight(.semibold)
-                        Text("Global instructions Claude Code reads in every project (~/.claude/CLAUDE.md). Describe your preferences: coding style, tools, how you want Claude to communicate.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-
-                        TextEditor(text: $config.claudeMdText)
-                            .font(.system(.body, design: .monospaced))
-                            .frame(minHeight: 220)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 6)
-                                    .stroke(Color(NSColor.separatorColor), lineWidth: 1)
-                            )
-
-                        HStack {
-                            Button("Save CLAUDE.md") {
-                                config.saveClaudeMd()
-                            }
-                            Button("Reload") {
-                                config.load()
-                            }
-                            Spacer()
-                        }
-                    }
-
-                    if let error = config.loadError {
-                        Label(error, systemImage: "exclamationmark.triangle.fill")
-                            .font(.caption)
-                            .foregroundColor(.orange)
-                    }
-                }
-                .padding()
-            }
-
-            Divider()
-
-            // Status footer
-            HStack {
-                if let status = config.statusMessage {
-                    Text(status)
-                        .font(.caption)
-                        .foregroundColor(status.hasPrefix("Saved") || status.hasPrefix("Retention") ? .green : .orange)
-                }
-                Spacer()
-                Text("~/.claude")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-            }
-            .padding(10)
-            .background(Color(NSColor.controlBackgroundColor))
+            statusBar
         }
-        .frame(width: 520, height: 520)
+        .frame(minWidth: 560, idealWidth: 560, minHeight: 620, idealHeight: 660)
         .onAppear {
             config.load()
             alertsEnabled = sessionMonitor.hooksInstalled
             sessionMonitor.refreshNotificationAuthStatus()
         }
+    }
+
+    // MARK: - Menu bar
+
+    private var menuBarSection: some View {
+        Section {
+            Picker("Style", selection: $menuBarStyle) {
+                ForEach(MenuBarStyle.allCases) { style in
+                    Text(style.label).tag(style)
+                }
+            }
+            .pickerStyle(.segmented)
+            .onChange(of: menuBarStyle) { newValue in
+                MenuBarAppearance.style = newValue
+                AppDelegate.shared?.updateStatusItem()
+            }
+
+            Picker("Show", selection: $menuBarMetric) {
+                ForEach(MenuBarMetric.allCases) { metric in
+                    Text(metric.label).tag(metric)
+                }
+            }
+            .onChange(of: menuBarMetric) { newValue in
+                MenuBarAppearance.metric = newValue
+                AppDelegate.shared?.updateStatusItem()
+            }
+        } header: {
+            Text("Menu Bar")
+        } footer: {
+            Text("Native matches your menu bar and colors the number only when a limit runs hot. Tinted colors the icon by usage level. Emoji is the classic 🟢 look. While a session needs you, the icon becomes an orange bell with a count.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+    }
+
+    // MARK: - Session alerts
+
+    private var sessionAlertsSection: some View {
+        Section {
+            Toggle("Alert when a session needs attention", isOn: $alertsEnabled)
+                .onChange(of: alertsEnabled) { newValue in
+                    guard newValue != sessionMonitor.hooksInstalled else { return }
+                    do {
+                        try sessionMonitor.setEnabled(newValue)
+                        config.statusMessage = newValue
+                            ? "Saved: session hooks installed"
+                            : "Saved: session hooks removed"
+                    } catch {
+                        alertsEnabled = !newValue
+                        config.statusMessage = "Failed: \(error.localizedDescription)"
+                    }
+                }
+
+            Toggle("Show notification pop-ups", isOn: Binding(
+                get: { sessionMonitor.popupNotificationsEnabled },
+                set: { sessionMonitor.popupNotificationsEnabled = $0 }
+            ))
+            .disabled(!alertsEnabled)
+
+            if alertsEnabled {
+                notificationPermissionRow
+            }
+        } header: {
+            Text("Session Alerts")
+        } footer: {
+            Text("Installs status hooks into ~/.claude/settings.json (your other settings and hooks are preserved). Takes effect for Claude Code sessions started or resumed after enabling.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private var notificationPermissionRow: some View {
+        HStack {
+            switch sessionMonitor.notificationsAuthorized {
+            case false:
+                Label("Notifications are off in System Settings", systemImage: "bell.slash.fill")
+                    .foregroundColor(.orange)
+                Spacer()
+                Button("Open Settings…") {
+                    NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.notifications")!)
+                }
+            case nil:
+                Label("Notification permission not granted yet", systemImage: "bell.badge")
+                    .foregroundColor(.orange)
+                Spacer()
+                Button("Request") {
+                    sessionMonitor.requestNotificationPermission()
+                }
+            default:
+                Label("Notifications allowed", systemImage: "bell.fill")
+                    .foregroundColor(.green)
+                Spacer()
+                Button("Send Test") {
+                    sessionMonitor.sendTestNotification()
+                }
+            }
+        }
+        .font(.callout)
+    }
+
+    // MARK: - Claude status
+
+    private var statusAlertsSection: some View {
+        Section {
+            Toggle("Alert when Claude status changes", isOn: Binding(
+                get: { statusMonitor.alertsEnabled },
+                set: { statusMonitor.alertsEnabled = $0 }
+            ))
+        } header: {
+            Text("Claude Status")
+        } footer: {
+            Text("Notifies when status.claude.com reports an outage — and when service recovers. Checked every 5 minutes.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+    }
+
+    // MARK: - Conversation retention
+
+    private var retentionSection: some View {
+        Section {
+            HStack {
+                Text("Keep conversations for")
+                Spacer()
+                TextField("30", text: $config.cleanupPeriodDays)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 64)
+                    .multilineTextAlignment(.trailing)
+                Text("days")
+                    .foregroundColor(.secondary)
+                Button("Save") {
+                    config.saveCleanupPeriod()
+                }
+            }
+        } header: {
+            Text("Conversation Retention")
+        } footer: {
+            Text("How long Claude Code keeps local transcripts (cleanupPeriodDays in ~/.claude/settings.json). Leave empty for the default of 30 days.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+    }
+
+    // MARK: - CLAUDE.md
+
+    private var claudeMdSection: some View {
+        Section {
+            TextEditor(text: $config.claudeMdText)
+                .font(.system(.body, design: .monospaced))
+                .frame(minHeight: 180)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(Color(NSColor.separatorColor), lineWidth: 1)
+                )
+
+            HStack {
+                Button("Save CLAUDE.md") {
+                    config.saveClaudeMd()
+                }
+                Button("Reload") {
+                    config.load()
+                }
+                Spacer()
+                if let error = config.loadError {
+                    Label(error, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                }
+            }
+        } header: {
+            Text("How You Like to Work")
+        } footer: {
+            Text("Global instructions Claude Code reads in every project (~/.claude/CLAUDE.md): coding style, tools, how you want Claude to communicate.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+    }
+
+    // MARK: - Status bar
+
+    private var statusBar: some View {
+        HStack {
+            if let status = config.statusMessage {
+                Text(status)
+                    .font(.caption)
+                    .foregroundColor(status.hasPrefix("Saved") || status.hasPrefix("Retention") ? .green : .orange)
+            }
+            Spacer()
+            Text("~/.claude")
+                .font(.caption2)
+                .foregroundColor(.secondary)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color(NSColor.controlBackgroundColor))
     }
 }
 
