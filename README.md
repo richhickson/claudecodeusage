@@ -1,7 +1,7 @@
 # Claude Usage
 
 <p align="center">
-  <img src="Xnapper-2026-01-09-11.22.53.png" alt="Claude Usage Screenshot" width="300">
+  <img src="screenshotSept.png" alt="Claude Usage Screenshot" width="300">
 </p>
 
 A lightweight macOS menubar app that displays your Claude Code usage limits at a glance — and alerts you when a Claude Code session needs your attention.
