@@ -1,0 +1,31 @@
+name: Build and test
+
+on:
+  push:
+    branches: [main, 'fix/**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Credential parsing tests
+        run: swift test
+      - name: Build application
+        run: xcodebuild -project ClaudeUsage.xcodeproj -scheme ClaudeUsage -configuration Debug -derivedDataPath build CODE_SIGNING_ALLOWED=NO build
+      - name: Package local test build
+        run: ditto -c -k --keepParent build/Build/Products/Debug/ClaudeUsage.app ClaudeUsage-test.zip
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ClaudeUsage-test
+          path: ClaudeUsage-test.zip
+          retention-days: 7
+          if-no-files-found: error

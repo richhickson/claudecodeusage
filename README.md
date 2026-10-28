@@ -17,7 +17,7 @@ Built by [@richhickson](https://x.com/richhickson)
 - 🎨 **Menu bar styles** - Native (monochrome template icon, colors only when a limit runs hot), Tinted (icon colored by usage), or classic Emoji — plus your choice of metric (session/weekly/model %, spend, or icon only)
 - ⏱️ **Time until reset** for each limit
 - 🔄 **Auto-refresh** every 5 minutes, with retry on network/keychain hiccups and refresh on wake from sleep
-- 👥 **Multiple accounts** - every Claude Code login on the machine (one per `CLAUDE_CONFIG_DIR`) gets its own tab, labelled by account email; the menu bar shows the selected one, and the traffic light watches them all
+- 👥 **Multiple accounts** - every Claude Code login on the machine (one per `CLAUDE_CONFIG_DIR`) appears in an account dropdown, labelled by full account email; the menu-bar percentage and colour follow the selected account
 
 ### Session alerts (opt-in)
 - 🔔 **Menu bar bell** naming the project that's waiting for your permission or input (a count when several are)
@@ -87,7 +87,7 @@ Then build with ⌘B and run with ⌘R.
 
 ## How It Works
 
-Claude Usage reads your Claude Code OAuth credentials from macOS Keychain and queries the usage API endpoint at `api.anthropic.com/api/oauth/usage`.
+Claude Usage reads your Claude Code OAuth credentials from macOS Keychain and queries the usage API endpoint at `api.anthropic.com/api/oauth/usage`. Stores containing only MCP/plugin logins are excluded from the account dropdown; their credentials are never changed or deleted. Unreadable or malformed account stores still show an error so authentication problems remain visible.
 
 Session alerts work via Claude Code's hooks system: a tiny shell script reports each session's status (working / needs attention / finished) to JSON sidecar files in `claudeusage/` inside your Claude Code config dir, which the app watches. Everything stays on your machine.
 

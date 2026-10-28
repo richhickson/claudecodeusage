@@ -40,9 +40,22 @@ struct ClaudeProfile: Identifiable {
     var error: String?
     var id: String { service }
 
-    /// Short form for the segmented picker (email local part)
-    var shortLabel: String {
-        label.split(separator: "@").first.map(String.init) ?? label
+}
+
+/// A Claude credential store can contain MCP logins without a Claude account.
+/// nil means a valid store that should not appear in the account selector.
+enum ClaudeCredentialParser {
+    static func accessToken(from data: Data) throws -> String? {
+        guard let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            throw KeychainError.invalidCredentialFormat
+        }
+        guard let account = json["claudeAiOauth"] else { return nil }
+        guard let oauth = account as? [String: Any],
+              let token = oauth["accessToken"] as? String,
+              !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw KeychainError.missingOAuthToken(availableKeys: "claudeAiOauth")
+        }
+        return token
     }
 }
 
@@ -95,14 +108,11 @@ class UsageManager: ObservableObject {
         return URLSession(configuration: config)
     }()
 
-    /// Highest utilization across session, weekly, and model-scoped limits —
-    /// over every profile, so a hot limit on another account still shows
+    /// Menu-bar colour and percentage both describe the selected account.
     var maxUtilization: Double {
-        let usages = profiles.isEmpty ? [usage].compactMap { $0 } : profiles.compactMap(\.usage)
-        return usages.map { u in
-            let maxModelUtil = u.modelLimits.map(\.utilization).max() ?? 0
-            return max(u.sessionUtilization, u.weeklyUtilization, maxModelUtil)
-        }.max() ?? 0
+        guard let usage else { return 0 }
+        let model = usage.modelLimits.map(\.utilization).max() ?? 0
+        return max(usage.sessionUtilization, usage.weeklyUtilization, model)
     }
 
     var statusEmoji: String {
@@ -124,7 +134,10 @@ class UsageManager: ObservableObject {
             var profile = ClaudeProfile(service: service,
                                         label: profileLabels[service] ?? Self.fallbackLabel(service))
             do {
-                let token = try getClaudeCodeToken(service: service)
+                guard let token = try await getClaudeCodeTokenWithRetry(service: service) else {
+                    // MCP-only stores remain untouched in Keychain.
+                    continue
+                }
                 profile.usage = try await fetchUsageWithRetry(token: token)
                 if profileLabels[service] == nil,
                    let email = await fetchProfileEmail(token: token) {
@@ -132,14 +145,7 @@ class UsageManager: ObservableObject {
                     profile.label = email
                 }
             } catch let keychainError as KeychainError {
-                // Keychain may not be readable right after boot/wake; retry the
-                // way the old single-profile path did
-                if keychainError.isRetryable,
-                   let data = await retryUsageAfterKeychainDelay(service: service) {
-                    profile.usage = data
-                } else {
-                    profile.error = keychainError.localizedDescription
-                }
+                profile.error = keychainError.localizedDescription
             } catch {
                 profile.error = error.localizedDescription
             }
@@ -168,14 +174,16 @@ class UsageManager: ObservableObject {
         error = selected?.error ?? (profiles.isEmpty ? KeychainError.notLoggedIn.localizedDescription : nil)
     }
 
-    /// Up to 5 keychain retries, 2s apart (post-boot/wake unlock), then usage fetch
-    private func retryUsageAfterKeychainDelay(service: String) async -> UsageData? {
-        for _ in 0..<5 {
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
-            guard let token = try? getClaudeCodeToken(service: service) else { continue }
-            return try? await fetchUsageWithRetry(token: token)
+    /// A successful MCP-only read ends retries without creating an error profile.
+    private func getClaudeCodeTokenWithRetry(service: String) async throws -> String? {
+        for attempt in 0...5 {
+            do {
+                return try getClaudeCodeToken(service: service)
+            } catch let error as KeychainError where error.isRetryable && attempt < 5 {
+                try await Task.sleep(nanoseconds: 2_000_000_000)
+            }
         }
-        return nil
+        throw KeychainError.notLoggedIn
     }
 
     /// Usage fetch with retry on 429/5xx (exponential backoff) and network errors
@@ -251,101 +259,28 @@ class UsageManager: ObservableObject {
         return account["email"] as? String
     }
 
-    /// Get token from Claude Code's keychain using security CLI (avoids ACL prompt!)
-    private func getClaudeCodeToken(service: String) throws -> String {
-        // Use security CLI which is already in the keychain ACL
+    /// Read only this service: a failed named login must never use another
+    /// profile's token through the legacy global fallback.
+    private func getClaudeCodeToken(service: String) throws -> String? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
         process.arguments = ["find-generic-password", "-s", service, "-w"]
-
         let pipe = Pipe()
-        let errorPipe = Pipe()
         process.standardOutput = pipe
-        process.standardError = errorPipe
-
+        process.standardError = FileHandle.nullDevice
         do {
             try process.run()
-            process.waitUntilExit()
         } catch {
             throw KeychainError.unexpectedError(status: -1)
         }
-
+        // Drain before waiting so a large credential store cannot fill the pipe.
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
-        let errorString = String(data: errorData, encoding: .utf8) ?? ""
-
+        process.waitUntilExit()
         guard process.terminationStatus == 0 else {
-            // Try alternate keychain entry as fallback
-            if let token = try? getAccessTokenFromAlternateKeychain() {
-                return token
-            }
-            // Include error detail for debugging
-            if errorString.contains("could not be found") {
-                throw KeychainError.notLoggedIn
-            }
-            throw KeychainError.securityCommandFailed(errorString.isEmpty ? "Exit code \(process.terminationStatus)" : errorString)
+            if process.terminationStatus == 44 { throw KeychainError.notLoggedIn }
+            throw KeychainError.securityCommandFailed("security exited with status \(process.terminationStatus)")
         }
-
-        guard let jsonString = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !jsonString.isEmpty else {
-            if let token = try? getAccessTokenFromAlternateKeychain() {
-                return token
-            }
-            throw KeychainError.notLoggedIn
-        }
-
-        // Try to parse as OAuth credentials
-        if let jsonData = jsonString.data(using: .utf8),
-           let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] {
-            // Check for claudeAiOauth structure
-            if let oauth = json["claudeAiOauth"] as? [String: Any],
-               let accessToken = oauth["accessToken"] as? String {
-                return accessToken
-            }
-            // Show what keys ARE present for debugging
-            let keys = Array(json.keys).joined(separator: ", ")
-            throw KeychainError.missingOAuthToken(availableKeys: keys)
-        }
-
-        // Primary entry doesn't have OAuth - try alternate keychain
-        if let token = try? getAccessTokenFromAlternateKeychain() {
-            return token
-        }
-
-        throw KeychainError.invalidCredentialFormat
-    }
-
-    /// Fallback: Check for "Claude Code" keychain entry (alternate storage location)
-    private func getAccessTokenFromAlternateKeychain() throws -> String {
-        // Use security CLI which is already in the keychain ACL
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
-        process.arguments = ["find-generic-password", "-s", "Claude Code", "-w"]
-
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = pipe
-
-        do {
-            try process.run()
-            process.waitUntilExit()
-        } catch {
-            throw KeychainError.notLoggedIn
-        }
-
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-
-        guard process.terminationStatus == 0,
-              let jsonString = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !jsonString.isEmpty,
-              let jsonData = jsonString.data(using: .utf8),
-              let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
-              let oauth = json["claudeAiOauth"] as? [String: Any],
-              let accessToken = oauth["accessToken"] as? String else {
-            throw KeychainError.notLoggedIn
-        }
-
-        return accessToken
+        return try ClaudeCredentialParser.accessToken(from: data)
     }
 
     private func fetchUsage(token: String) async throws -> UsageData {

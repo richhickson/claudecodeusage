@@ -49,7 +49,7 @@ struct UsageView: View {
                 Divider()
             }
 
-            // Profile tabs (only when several Claude Code logins exist)
+            // Account selector (only when several Claude Code logins exist)
             if manager.profiles.count > 1 {
                 profilePicker()
             }
@@ -77,17 +77,19 @@ struct UsageView: View {
     
     @ViewBuilder
     func profilePicker() -> some View {
-        Picker("", selection: Binding(
+        Picker("Account", selection: Binding(
             get: { manager.selectedProfileService ?? "" },
             set: { manager.selectProfile($0) }
         )) {
             ForEach(manager.profiles) { profile in
-                Text(profile.shortLabel).tag(profile.service)
+                Text(profile.label).tag(profile.service)
             }
         }
-        .pickerStyle(.segmented)
+        .pickerStyle(.menu)
+        .frame(maxWidth: .infinity)
         .labelsHidden()
-        .help(manager.profiles.map(\.label).joined(separator: " · "))
+        .accessibilityLabel("Claude account")
+        .help("Choose a Claude account")
         .padding(.horizontal)
         .padding(.top, 10)
     }
