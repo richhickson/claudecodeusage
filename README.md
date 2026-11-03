@@ -50,10 +50,12 @@ Built by [@richhickson](https://x.com/richhickson)
 ### Build from Source
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/claude-usage.git
-cd claude-usage
+git clone https://github.com/richhickson/claudecodeusage.git
+cd claudecodeusage
 open ClaudeUsage.xcodeproj
 ```
+
+To run the tests: `swift test`
 
 Then build with ⌘B and run with ⌘R.
 
@@ -95,7 +97,7 @@ Session alerts work via Claude Code's hooks system: a tiny shell script reports 
 
 ### Custom config dir (`CLAUDE_CONFIG_DIR`)
 
-Claude Code keeps its config in `~/.claude` unless `CLAUDE_CONFIG_DIR` points elsewhere. When it does, Claude Code also stores its login under its own Keychain entry, `Claude Code-credentials-<8 hex digits>`, rather than `Claude Code-credentials`. Claude Usage follows both: it uses `CLAUDE_CONFIG_DIR` for settings, CLAUDE.md and session alerts, and reads that config dir's Keychain entry first, falling back to the default one.
+Claude Code keeps its config in `~/.claude` unless `CLAUDE_CONFIG_DIR` points elsewhere. When it does, Claude Code also stores its login under its own Keychain entry, `Claude Code-credentials-<8 hex digits>`, rather than `Claude Code-credentials`. Claude Usage finds every such login and lists each one in the account dropdown; settings, CLAUDE.md and session alerts follow the active `CLAUDE_CONFIG_DIR`.
 
 Apps started from Finder or at login don't see variables set in your shell profile, so Claude Usage also checks the launchd user environment. If you set `CLAUDE_CONFIG_DIR` in your shell, set it there too:
 
