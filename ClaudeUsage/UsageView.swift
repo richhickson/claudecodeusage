@@ -103,16 +103,21 @@ struct UsageView: View {
                 subtitle: "5-hour window",
                 percentage: usage.sessionPercentage,
                 resetsAt: usage.sessionResetsAt,
-                color: colorForPercentage(usage.sessionPercentage)
+                color: colorForPercentage(usage.sessionPercentage),
+                sparkline: manager.sessionHistory,
+                sparklineLabel: "24h"
             )
-            
+
             // Weekly usage
             UsageRow(
                 title: "Weekly",
                 subtitle: "7-day window",
                 percentage: usage.weeklyPercentage,
                 resetsAt: usage.weeklyResetsAt,
-                color: colorForPercentage(usage.weeklyPercentage)
+                color: colorForPercentage(usage.weeklyPercentage),
+                sparkline: manager.weeklyHistory,
+                sparklineLabel: "7d",
+                footnote: manager.weeklyForecast ?? manager.weeklyPeaks
             )
             
             // Model-scoped weekly limits (Fable, Opus, etc.)
@@ -477,13 +482,36 @@ struct UsageView: View {
     }
 }
 
+/// Tiny utilization-over-time line (0–100 scale), issue #16
+struct Sparkline: View {
+    let points: [Double]
+    let color: Color
+
+    var body: some View {
+        GeometryReader { geometry in
+            Path { path in
+                for (index, value) in points.enumerated() {
+                    let x = geometry.size.width * CGFloat(index) / CGFloat(max(points.count - 1, 1))
+                    let y = geometry.size.height * (1 - CGFloat(min(max(value, 0), 100)) / 100)
+                    let point = CGPoint(x: x, y: y)
+                    index == 0 ? path.move(to: point) : path.addLine(to: point)
+                }
+            }
+            .stroke(color.opacity(0.7), style: StrokeStyle(lineWidth: 1.2, lineCap: .round, lineJoin: .round))
+        }
+    }
+}
+
 struct UsageRow: View {
     let title: String
     let subtitle: String
     let percentage: Int
     let resetsAt: Date?
     let color: Color
-    
+    var sparkline: [Double] = []
+    var sparklineLabel: String = ""
+    var footnote: String? = nil
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
@@ -495,29 +523,43 @@ struct UsageRow: View {
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
-                
+
                 Spacer()
-                
+
                 Text("\(percentage)%")
                     .font(.title2)
                     .fontWeight(.bold)
                     .foregroundColor(color)
             }
-            
+
             // Progress bar
             GeometryReader { geometry in
                 ZStack(alignment: .leading) {
                     RoundedRectangle(cornerRadius: 4)
                         .fill(Color(NSColor.separatorColor))
                         .frame(height: 8)
-                    
+
                     RoundedRectangle(cornerRadius: 4)
                         .fill(color)
                         .frame(width: geometry.size.width * CGFloat(percentage) / 100, height: 8)
                 }
             }
             .frame(height: 8)
-            
+
+            // History sparkline (needs ~1h of snapshots before it appears)
+            if sparkline.count >= 12 {
+                HStack(alignment: .bottom, spacing: 4) {
+                    Sparkline(points: sparkline, color: color)
+                        .frame(height: 16)
+                    if !sparklineLabel.isEmpty {
+                        Text(sparklineLabel)
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .help("Utilization over the last \(sparklineLabel)")
+            }
+
             // Reset time
             if let resetsAt = resetsAt {
                 HStack {
@@ -527,6 +569,17 @@ struct UsageRow: View {
                         .font(.caption)
                 }
                 .foregroundColor(.secondary)
+            }
+
+            // Burn-rate forecast / weekly peaks
+            if let footnote {
+                HStack(spacing: 4) {
+                    Image(systemName: "chart.line.uptrend.xyaxis")
+                        .font(.caption2)
+                    Text(footnote)
+                        .font(.caption)
+                }
+                .foregroundColor(footnote.hasPrefix("On pace") ? .orange : .secondary)
             }
         }
         .padding(12)

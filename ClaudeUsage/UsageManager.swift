@@ -59,6 +59,113 @@ enum ClaudeCredentialParser {
     }
 }
 
+/// One usage reading, recorded on every successful poll (every 5 minutes)
+struct UsageSnapshot: Codable {
+    let ts: Date
+    let session: Double
+    let weekly: Double
+    let model: Double?   // highest model-scoped limit at the time
+}
+
+/// Local usage history, 30 days per profile, in Application Support.
+/// Powers the sparklines, burn-rate forecast and weekly-peaks summary
+/// (issue #16). Everything stays on this machine.
+@MainActor
+final class UsageHistoryStore {
+    static let shared = UsageHistoryStore()
+    static let retentionDays = 30.0
+
+    private var data: [String: [UsageSnapshot]] = [:]
+    private let fileURL: URL
+
+    private init() {
+        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("ClaudeUsage", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        fileURL = dir.appendingPathComponent("usage-history.json")
+        if let raw = try? Data(contentsOf: fileURL) {
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .secondsSince1970
+            data = (try? decoder.decode([String: [UsageSnapshot]].self, from: raw)) ?? [:]
+        }
+    }
+
+    /// Test seam: in-memory store, never touches the real history file
+    init(seed: [String: [UsageSnapshot]]) {
+        data = seed
+        fileURL = FileManager.default.temporaryDirectory.appendingPathComponent("claudeusage-test-history.json")
+    }
+
+    func record(service: String, usage: UsageData) {
+        var snapshots = data[service] ?? []
+        snapshots.append(UsageSnapshot(ts: Date(),
+                                       session: usage.sessionUtilization,
+                                       weekly: usage.weeklyUtilization,
+                                       model: usage.modelLimits.map(\.utilization).max()))
+        let cutoff = Date().addingTimeInterval(-Self.retentionDays * 86_400)
+        snapshots.removeAll { $0.ts < cutoff }
+        data[service] = snapshots
+
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .secondsSince1970
+        if let out = try? encoder.encode(data) {
+            try? out.write(to: fileURL, options: .atomic)
+        }
+    }
+
+    /// Values for a sparkline covering the last `hours`, downsampled for drawing
+    func series(service: String, hours: Double, keyPath: KeyPath<UsageSnapshot, Double>, maxPoints: Int = 160) -> [Double] {
+        let cutoff = Date().addingTimeInterval(-hours * 3600)
+        let values = (data[service] ?? []).filter { $0.ts > cutoff }.map { $0[keyPath: keyPath] }
+        guard values.count > maxPoints else { return values }
+        let step = Double(values.count) / Double(maxPoints)
+        return (0..<maxPoints).map { values[Int(Double($0) * step)] }
+    }
+
+    /// "On pace to hit 100% Thu 19:00" — only when the recent burn rate
+    /// actually crosses 100% before the weekly reset
+    func weeklyForecast(service: String, current: UsageData) -> String? {
+        guard let resetsAt = current.weeklyResetsAt else { return nil }
+        let recent = (data[service] ?? []).filter { $0.ts > Date().addingTimeInterval(-86_400) }
+
+        // Use only the run since the last reset (a drop of >5 points means reset)
+        var run: [UsageSnapshot] = []
+        for snapshot in recent {
+            if let last = run.last, snapshot.weekly < last.weekly - 5 { run = [] }
+            run.append(snapshot)
+        }
+        guard let first = run.first, let last = run.last else { return nil }
+        let elapsed = last.ts.timeIntervalSince(first.ts)
+        guard elapsed >= 3 * 3600 else { return nil }   // need 3h+ of signal
+
+        let ratePerSecond = (last.weekly - first.weekly) / elapsed
+        guard ratePerSecond > 0 else { return nil }
+        let projected = last.weekly + ratePerSecond * resetsAt.timeIntervalSince(last.ts)
+        guard projected >= 100 else { return nil }
+
+        let hitDate = last.ts.addingTimeInterval((100 - last.weekly) / ratePerSecond)
+        let when = hitDate.formatted(Date.FormatStyle().weekday(.abbreviated).hour(.defaultDigits(amPM: .abbreviated)))
+        return "On pace to hit 100% \(when)"
+    }
+
+    /// "Past 4 weeks peaked at 62% avg" — the upgrade/downgrade answer.
+    /// Appears once at least two full past weeks of history exist.
+    func weeklyPeaks(service: String) -> String? {
+        let calendar = Calendar.current
+        let thisWeek = calendar.dateInterval(of: .weekOfYear, for: Date())?.start
+        let byWeek = Dictionary(grouping: data[service] ?? []) {
+            calendar.dateInterval(of: .weekOfYear, for: $0.ts)?.start ?? $0.ts
+        }
+        let pastPeaks = byWeek.filter { $0.key != thisWeek }
+            .mapValues { $0.map(\.weekly).max() ?? 0 }
+            .sorted { $0.key > $1.key }
+            .prefix(4)
+        guard pastPeaks.count >= 2 else { return nil }
+        let average = pastPeaks.map(\.value).reduce(0, +) / Double(pastPeaks.count)
+        return String(format: "Past %d weeks peaked at %.0f%% avg", pastPeaks.count, average)
+    }
+}
+
 @MainActor
 class UsageManager: ObservableObject {
     @Published var usage: UsageData?
@@ -149,6 +256,9 @@ class UsageManager: ObservableObject {
             } catch {
                 profile.error = error.localizedDescription
             }
+            if let fetched = profile.usage {
+                UsageHistoryStore.shared.record(service: service, usage: fetched)
+            }
             newProfiles.append(profile)
         }
 
@@ -158,6 +268,30 @@ class UsageManager: ObservableObject {
         }
         applySelection()
         lastUpdated = Date()
+    }
+
+    // MARK: History (issue #16) — all for the selected profile
+
+    /// Session sparkline: last 24 hours
+    var sessionHistory: [Double] {
+        guard let service = selectedProfileService else { return [] }
+        return UsageHistoryStore.shared.series(service: service, hours: 24, keyPath: \.session)
+    }
+
+    /// Weekly sparkline: last 7 days
+    var weeklyHistory: [Double] {
+        guard let service = selectedProfileService else { return [] }
+        return UsageHistoryStore.shared.series(service: service, hours: 7 * 24, keyPath: \.weekly)
+    }
+
+    var weeklyForecast: String? {
+        guard let service = selectedProfileService, let usage else { return nil }
+        return UsageHistoryStore.shared.weeklyForecast(service: service, current: usage)
+    }
+
+    var weeklyPeaks: String? {
+        guard let service = selectedProfileService else { return nil }
+        return UsageHistoryStore.shared.weeklyPeaks(service: service)
     }
 
     /// Switch the popover and menu bar to another profile (no refetch needed)
