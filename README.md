@@ -14,7 +14,12 @@ Built by [@richhickson](https://x.com/richhickson)
 - 📊 **Session, Weekly & per-model limits** - including model-scoped weekly caps (e.g. Fable/Opus) as Anthropic rolls them out
 - 💵 **Overage tracking** - extra-usage spend against your monthly limit
 - 🚦 **Color-coded status** - Green (OK), Yellow (>70%), Red (>90%)
-- 🎨 **Menu bar styles** - Native (monochrome template icon, colors only when a limit runs hot), Tinted (icon colored by usage), or classic Emoji — plus your choice of metric (session/weekly/model %, spend, or icon only)
+- 🎨 **Menu bar styles** - Native (monochrome template icon, colors only when a limit runs hot), Tinted (icon colored by usage), or classic Emoji — plus your choice of metric (session/weekly/model %, spend, or icon only):
+
+  | Native | Tinted | Emoji |
+  |:------:|:------:|:-----:|
+  | ![Native menu bar style](docs/style-native.png) | ![Tinted menu bar style](docs/style-tinted.png) | ![Emoji menu bar style](docs/style-emoji.png) |
+
 - ⏱️ **Time until reset** for each limit
 - 🔄 **Auto-refresh** every 5 minutes, with retry on network/keychain hiccups and refresh on wake from sleep
 - 👥 **Multiple accounts** - every Claude Code login on the machine (one per `CLAUDE_CONFIG_DIR`) appears in an account dropdown, labelled by full account email; the menu-bar percentage and colour follow the selected account
