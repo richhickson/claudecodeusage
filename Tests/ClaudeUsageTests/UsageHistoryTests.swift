@@ -78,6 +78,25 @@ final class UsageHistoryTests: XCTestCase {
     }
 
     @MainActor
+    func testRecordFoldsReadingsIntoTodaysRollup() {
+        let store = UsageHistoryStore(seed: [:])
+        store.record(service: service, usage: usage(weekly: 50, resetsIn: 86_400))
+        store.record(service: service, usage: usage(weekly: 70, resetsIn: 86_400))
+        store.record(service: service, usage: usage(weekly: 60, resetsIn: 86_400))
+        let rollups = store.dailyRollups(service: service, days: 7)
+        XCTAssertEqual(rollups.count, 1)
+        XCTAssertEqual(rollups[0].peakWeekly, 70)
+    }
+
+    func testLegacyV117FormatMigratesWithRollups() throws {
+        // v1.17 stored a plain {service: [snapshot]} dictionary
+        let legacy = "{\"\(service)\": [{\"ts\": \(Date().timeIntervalSince1970 - 3600), \"session\": 20, \"weekly\": 45}, {\"ts\": \(Date().timeIntervalSince1970), \"session\": 30, \"weekly\": 55}]}"
+        let decoded = UsageHistoryStore.decodeHistory(from: Data(legacy.utf8))
+        XCTAssertEqual(decoded[service]?.snapshots.count, 2)
+        XCTAssertEqual(decoded[service]?.rollups.map(\.peakWeekly).max(), 55)
+    }
+
+    @MainActor
     func testSeriesDownsamplesLongHistories() {
         let store = UsageHistoryStore(seed: [service: ramp(hours: 24 * 7, from: 0, to: 100)])
         let series = store.series(service: service, hours: 24 * 7, keyPath: \.weekly)

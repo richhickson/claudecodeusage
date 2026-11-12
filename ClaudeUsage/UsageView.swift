@@ -1,6 +1,115 @@
 import SwiftUI
 import AppKit
+import Charts
 import ServiceManagement
+
+/// Usage history window: daily peaks over 7/30/90/365 days, per account
+/// (issue #16 follow-up). Has its own account picker so any account can be
+/// inspected without changing the menu bar selection.
+struct HistoryView: View {
+    @ObservedObject var manager: UsageManager
+    @State private var rangeDays = 30
+    @State private var service: String?
+
+    private var activeService: String? { service ?? manager.selectedProfileService }
+    private var rollups: [DailyUsageRollup] {
+        guard let activeService else { return [] }
+        return UsageHistoryStore.shared.dailyRollups(service: activeService, days: rangeDays)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                if manager.profiles.count > 1 {
+                    Picker("Account", selection: Binding(
+                        get: { activeService ?? "" },
+                        set: { service = $0 }
+                    )) {
+                        ForEach(manager.profiles) { profile in
+                            Text(profile.label).tag(profile.service)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(maxWidth: 240)
+                } else {
+                    Text(manager.profiles.first?.label ?? "Usage History")
+                        .font(.headline)
+                }
+                Spacer()
+                Picker("Range", selection: $rangeDays) {
+                    Text("7d").tag(7)
+                    Text("30d").tag(30)
+                    Text("90d").tag(90)
+                    Text("1y").tag(365)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(width: 220)
+            }
+
+            if rollups.count < 2 {
+                Spacer()
+                VStack(spacing: 8) {
+                    Image(systemName: "chart.xyaxis.line")
+                        .font(.largeTitle)
+                        .foregroundColor(.secondary)
+                    Text("History builds up while the app runs.\nCheck back in a few days.")
+                        .font(.callout)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity)
+                Spacer()
+            } else {
+                Chart(rollups, id: \.day) { rollup in
+                    LineMark(x: .value("Day", rollup.day, unit: .day),
+                             y: .value("Peak %", rollup.peakWeekly),
+                             series: .value("Metric", "Weekly peak"))
+                        .foregroundStyle(by: .value("Metric", "Weekly peak"))
+                        .interpolationMethod(.monotone)
+                    LineMark(x: .value("Day", rollup.day, unit: .day),
+                             y: .value("Peak %", rollup.peakSession),
+                             series: .value("Metric", "Session peak"))
+                        .foregroundStyle(by: .value("Metric", "Session peak"))
+                        .interpolationMethod(.monotone)
+                    if let model = rollup.peakModel {
+                        LineMark(x: .value("Day", rollup.day, unit: .day),
+                                 y: .value("Peak %", model),
+                                 series: .value("Metric", "Model peak"))
+                            .foregroundStyle(by: .value("Metric", "Model peak"))
+                            .interpolationMethod(.monotone)
+                    }
+                }
+                .chartForegroundStyleScale([
+                    "Weekly peak": Color.blue,
+                    "Session peak": Color.green.opacity(0.7),
+                    "Model peak": Color.orange.opacity(0.8),
+                ])
+                .chartYScale(domain: 0...100)
+                .chartLegend(position: .top, alignment: .leading)
+
+                statsRow()
+            }
+        }
+        .padding()
+        .frame(minWidth: 540, minHeight: 360)
+    }
+
+    @ViewBuilder
+    private func statsRow() -> some View {
+        let peak = rollups.map(\.peakWeekly).max() ?? 0
+        let average = rollups.map(\.peakWeekly).reduce(0, +) / Double(max(rollups.count, 1))
+        let hotDays = rollups.filter { $0.peakWeekly >= 90 }.count
+        HStack(spacing: 16) {
+            Label(String(format: "Weekly peak %.0f%%", peak), systemImage: "arrow.up.to.line")
+            Label(String(format: "Avg daily peak %.0f%%", average), systemImage: "chart.bar")
+            Label("\(hotDays) day\(hotDays == 1 ? "" : "s") at 90%+", systemImage: "flame")
+                .foregroundColor(hotDays > 0 ? .orange : .secondary)
+        }
+        .font(.caption)
+        .foregroundColor(.secondary)
+    }
+}
 
 struct UsageView: View {
     @ObservedObject var manager: UsageManager
@@ -429,6 +538,14 @@ struct UsageView: View {
                     Image(systemName: "globe")
                 }
                 .buttonStyle(.borderless)
+
+                Button(action: {
+                    AppDelegate.shared?.openHistoryWindow()
+                }) {
+                    Image(systemName: "clock.arrow.circlepath")
+                }
+                .buttonStyle(.borderless)
+                .help("Usage history (7/30/90/365 days)")
 
                 Button(action: {
                     AppDelegate.shared?.openSettingsWindow()

@@ -67,15 +67,30 @@ struct UsageSnapshot: Codable {
     let model: Double?   // highest model-scoped limit at the time
 }
 
+/// One day's peaks, kept long after the raw snapshots are pruned.
+/// Feeds the History window's 7/30/90/365-day charts.
+struct DailyUsageRollup: Codable {
+    let day: Date        // start of day
+    var peakSession: Double
+    var peakWeekly: Double
+    var peakModel: Double?
+}
+
+struct ProfileUsageHistory: Codable {
+    var snapshots: [UsageSnapshot] = []
+    var rollups: [DailyUsageRollup] = []
+}
+
 /// Local usage history, 30 days per profile, in Application Support.
 /// Powers the sparklines, burn-rate forecast and weekly-peaks summary
 /// (issue #16). Everything stays on this machine.
 @MainActor
 final class UsageHistoryStore {
     static let shared = UsageHistoryStore()
-    static let retentionDays = 30.0
+    static let retentionDays = 30.0        // raw 5-minute snapshots
+    static let rollupRetentionDays = 400.0 // daily peaks, for the 1y view
 
-    private var data: [String: [UsageSnapshot]] = [:]
+    private var data: [String: ProfileUsageHistory] = [:]
     private let fileURL: URL
 
     private init() {
@@ -84,27 +99,68 @@ final class UsageHistoryStore {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         fileURL = dir.appendingPathComponent("usage-history.json")
         if let raw = try? Data(contentsOf: fileURL) {
-            let decoder = JSONDecoder()
-            decoder.dateDecodingStrategy = .secondsSince1970
-            data = (try? decoder.decode([String: [UsageSnapshot]].self, from: raw)) ?? [:]
+            data = Self.decodeHistory(from: raw)
         }
     }
 
     /// Test seam: in-memory store, never touches the real history file
     init(seed: [String: [UsageSnapshot]]) {
-        data = seed
+        data = seed.mapValues { ProfileUsageHistory(snapshots: $0) }
         fileURL = FileManager.default.temporaryDirectory.appendingPathComponent("claudeusage-test-history.json")
     }
 
+    /// Current format, migrating v1.17's plain snapshot-array format in place
+    nonisolated static func decodeHistory(from raw: Data) -> [String: ProfileUsageHistory] {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .secondsSince1970
+        if let current = try? decoder.decode([String: ProfileUsageHistory].self, from: raw) {
+            return current
+        }
+        if let legacy = try? decoder.decode([String: [UsageSnapshot]].self, from: raw) {
+            return legacy.mapValues { snapshots in
+                var history = ProfileUsageHistory(snapshots: snapshots)
+                history.rollups = Self.rollups(from: snapshots)
+                return history
+            }
+        }
+        return [:]
+    }
+
+    nonisolated private static func rollups(from snapshots: [UsageSnapshot]) -> [DailyUsageRollup] {
+        let calendar = Calendar.current
+        let byDay = Dictionary(grouping: snapshots) { calendar.startOfDay(for: $0.ts) }
+        return byDay.map { day, snaps in
+            DailyUsageRollup(day: day,
+                             peakSession: snaps.map(\.session).max() ?? 0,
+                             peakWeekly: snaps.map(\.weekly).max() ?? 0,
+                             peakModel: snaps.compactMap(\.model).max())
+        }.sorted { $0.day < $1.day }
+    }
+
     func record(service: String, usage: UsageData) {
-        var snapshots = data[service] ?? []
-        snapshots.append(UsageSnapshot(ts: Date(),
-                                       session: usage.sessionUtilization,
-                                       weekly: usage.weeklyUtilization,
-                                       model: usage.modelLimits.map(\.utilization).max()))
-        let cutoff = Date().addingTimeInterval(-Self.retentionDays * 86_400)
-        snapshots.removeAll { $0.ts < cutoff }
-        data[service] = snapshots
+        var history = data[service] ?? ProfileUsageHistory()
+        let model = usage.modelLimits.map(\.utilization).max()
+        history.snapshots.append(UsageSnapshot(ts: Date(),
+                                               session: usage.sessionUtilization,
+                                               weekly: usage.weeklyUtilization,
+                                               model: model))
+        history.snapshots.removeAll { $0.ts < Date().addingTimeInterval(-Self.retentionDays * 86_400) }
+
+        // Fold this reading into today's rollup, which outlives the snapshots
+        let today = Calendar.current.startOfDay(for: Date())
+        if let index = history.rollups.firstIndex(where: { $0.day == today }) {
+            history.rollups[index].peakSession = max(history.rollups[index].peakSession, usage.sessionUtilization)
+            history.rollups[index].peakWeekly = max(history.rollups[index].peakWeekly, usage.weeklyUtilization)
+            history.rollups[index].peakModel = [history.rollups[index].peakModel, model].compactMap { $0 }.max()
+        } else {
+            history.rollups.append(DailyUsageRollup(day: today,
+                                                    peakSession: usage.sessionUtilization,
+                                                    peakWeekly: usage.weeklyUtilization,
+                                                    peakModel: model))
+            history.rollups.sort { $0.day < $1.day }
+        }
+        history.rollups.removeAll { $0.day < Date().addingTimeInterval(-Self.rollupRetentionDays * 86_400) }
+        data[service] = history
 
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .secondsSince1970
@@ -113,10 +169,16 @@ final class UsageHistoryStore {
         }
     }
 
+    /// Daily peaks for the History window, oldest first
+    func dailyRollups(service: String, days: Int) -> [DailyUsageRollup] {
+        let cutoff = Calendar.current.startOfDay(for: Date()).addingTimeInterval(-Double(days) * 86_400)
+        return (data[service]?.rollups ?? []).filter { $0.day >= cutoff }
+    }
+
     /// Values for a sparkline covering the last `hours`, downsampled for drawing
     func series(service: String, hours: Double, keyPath: KeyPath<UsageSnapshot, Double>, maxPoints: Int = 160) -> [Double] {
         let cutoff = Date().addingTimeInterval(-hours * 3600)
-        let values = (data[service] ?? []).filter { $0.ts > cutoff }.map { $0[keyPath: keyPath] }
+        let values = (data[service]?.snapshots ?? []).filter { $0.ts > cutoff }.map { $0[keyPath: keyPath] }
         guard values.count > maxPoints else { return values }
         let step = Double(values.count) / Double(maxPoints)
         return (0..<maxPoints).map { values[Int(Double($0) * step)] }
@@ -126,7 +188,7 @@ final class UsageHistoryStore {
     /// actually crosses 100% before the weekly reset
     func weeklyForecast(service: String, current: UsageData) -> String? {
         guard let resetsAt = current.weeklyResetsAt else { return nil }
-        let recent = (data[service] ?? []).filter { $0.ts > Date().addingTimeInterval(-86_400) }
+        let recent = (data[service]?.snapshots ?? []).filter { $0.ts > Date().addingTimeInterval(-86_400) }
 
         // Use only the run since the last reset (a drop of >5 points means reset)
         var run: [UsageSnapshot] = []
@@ -153,7 +215,7 @@ final class UsageHistoryStore {
     func weeklyPeaks(service: String) -> String? {
         let calendar = Calendar.current
         let thisWeek = calendar.dateInterval(of: .weekOfYear, for: Date())?.start
-        let byWeek = Dictionary(grouping: data[service] ?? []) {
+        let byWeek = Dictionary(grouping: data[service]?.snapshots ?? []) {
             calendar.dateInterval(of: .weekOfYear, for: $0.ts)?.start ?? $0.ts
         }
         let pastPeaks = byWeek.filter { $0.key != thisWeek }

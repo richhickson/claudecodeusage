@@ -18,6 +18,7 @@ Built by [@richhickson](https://x.com/richhickson)
 - ⏱️ **Time until reset** for each limit
 - 🔄 **Auto-refresh** every 5 minutes, with retry on network/keychain hiccups and refresh on wake from sleep
 - 👥 **Multiple accounts** - every Claude Code login on the machine (one per `CLAUDE_CONFIG_DIR`) appears in an account dropdown, labelled by full account email; the menu-bar percentage and colour follow the selected account
+- 📈 **History window** - daily peak usage charted over 7/30/90/365 days per account, with sparklines and a burn-rate forecast in the popover; history is stored locally for up to 400 days and never leaves your machine
 
 ### Session alerts (opt-in)
 - 🔔 **Menu bar bell** naming the project that's waiting for your permission or input (a count when several are)

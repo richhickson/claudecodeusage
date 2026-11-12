@@ -20,6 +20,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     var statusItem: NSStatusItem?
     var popover: NSPopover?
     var settingsWindow: NSWindow?
+    var historyWindow: NSWindow?
     var usageManager = UsageManager()
     var sessionMonitor = SessionMonitor()
     var statusMonitor = StatusMonitor()
@@ -283,6 +284,27 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         return image
     }
     
+    func openHistoryWindow() {
+        popover?.performClose(nil)
+
+        if historyWindow == nil {
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 560, height: 380),
+                styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                backing: .buffered,
+                defer: false
+            )
+            window.title = "Usage History"
+            window.contentViewController = NSHostingController(rootView: HistoryView(manager: usageManager))
+            window.isReleasedWhenClosed = false
+            window.center()
+            historyWindow = window
+        }
+
+        historyWindow?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
     func openSettingsWindow() {
         popover?.performClose(nil)
 
