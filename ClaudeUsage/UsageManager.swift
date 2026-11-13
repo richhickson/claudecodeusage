@@ -10,6 +10,9 @@ struct ModelLimit {
 }
 
 struct UsageData {
+    /// Ultra-plan verified accounts have no 5-hour limit; the API then omits
+    /// `five_hour` entirely and the Session card is hidden (issue #17)
+    var hasSessionLimit: Bool = true
     let sessionUtilization: Double
     let sessionResetsAt: Date?
     let weeklyUtilization: Double
@@ -502,6 +505,12 @@ class UsageManager: ObservableObject {
             throw UsageError.invalidResponse
         }
 
+        return Self.parseUsage(json)
+    }
+
+    /// Parse the /api/oauth/usage response. A missing `five_hour` means the
+    /// account has no 5-hour limit (Ultra verified accounts, issue #17), not 0%.
+    nonisolated static func parseUsage(_ json: [String: Any]) -> UsageData {
         let fiveHour = json["five_hour"] as? [String: Any]
         let sevenDay = json["seven_day"] as? [String: Any]
         // Try new field name first, fall back to legacy
@@ -525,6 +534,7 @@ class UsageManager: ObservableObject {
         }
 
         return UsageData(
+            hasSessionLimit: fiveHour != nil,
             sessionUtilization: fiveHour?["utilization"] as? Double ?? 0,
             sessionResetsAt: parseDate(fiveHour?["resets_at"] as? String),
             weeklyUtilization: sevenDay?["utilization"] as? Double ?? 0,
@@ -538,7 +548,7 @@ class UsageManager: ObservableObject {
         )
     }
 
-    private func parseDate(_ string: String?) -> Date? {
+    nonisolated private static func parseDate(_ string: String?) -> Date? {
         guard let string = string else { return nil }
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]

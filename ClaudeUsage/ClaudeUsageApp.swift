@@ -217,6 +217,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     private func metricText(usage: UsageData, metric: MenuBarMetric) -> String {
         switch metric {
         case .session:
+            // No 5-hour limit on this account: weekly is the metric that exists
+            guard usage.hasSessionLimit else { return "\(usage.weeklyPercentage)%" }
             return "\(usage.sessionPercentage)%"
         case .weekly:
             return "\(usage.weeklyPercentage)%"

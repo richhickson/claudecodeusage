@@ -61,17 +61,22 @@ struct HistoryView: View {
                 .frame(maxWidth: .infinity)
                 Spacer()
             } else {
+                // An account with no 5-hour limit records only zeros for
+                // session: a flat zero line is noise, not data (issue #17)
+                let showSession = rollups.contains { $0.peakSession > 0 }
                 Chart(rollups, id: \.day) { rollup in
                     LineMark(x: .value("Day", rollup.day, unit: .day),
                              y: .value("Peak %", rollup.peakWeekly),
                              series: .value("Metric", "Weekly peak"))
                         .foregroundStyle(by: .value("Metric", "Weekly peak"))
                         .interpolationMethod(.monotone)
-                    LineMark(x: .value("Day", rollup.day, unit: .day),
-                             y: .value("Peak %", rollup.peakSession),
-                             series: .value("Metric", "Session peak"))
-                        .foregroundStyle(by: .value("Metric", "Session peak"))
-                        .interpolationMethod(.monotone)
+                    if showSession {
+                        LineMark(x: .value("Day", rollup.day, unit: .day),
+                                 y: .value("Peak %", rollup.peakSession),
+                                 series: .value("Metric", "Session peak"))
+                            .foregroundStyle(by: .value("Metric", "Session peak"))
+                            .interpolationMethod(.monotone)
+                    }
                     if let model = rollup.peakModel {
                         LineMark(x: .value("Day", rollup.day, unit: .day),
                                  y: .value("Peak %", model),
@@ -206,16 +211,19 @@ struct UsageView: View {
     @ViewBuilder
     func usageContent(_ usage: UsageData) -> some View {
         VStack(spacing: 16) {
-            // Session usage
-            UsageRow(
-                title: "Session",
-                subtitle: "5-hour window",
-                percentage: usage.sessionPercentage,
-                resetsAt: usage.sessionResetsAt,
-                color: colorForPercentage(usage.sessionPercentage),
-                sparkline: manager.sessionHistory,
-                sparklineLabel: "24h"
-            )
+            // Session usage — hidden for accounts without a 5-hour limit
+            // (Ultra verified accounts, issue #17)
+            if usage.hasSessionLimit {
+                UsageRow(
+                    title: "Session",
+                    subtitle: "5-hour window",
+                    percentage: usage.sessionPercentage,
+                    resetsAt: usage.sessionResetsAt,
+                    color: colorForPercentage(usage.sessionPercentage),
+                    sparkline: manager.sessionHistory,
+                    sparklineLabel: "24h"
+                )
+            }
 
             // Weekly usage
             UsageRow(
