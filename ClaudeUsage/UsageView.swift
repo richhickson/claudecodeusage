@@ -13,8 +13,8 @@ struct HistoryView: View {
 
     private var activeService: String? { service ?? manager.selectedProfileService }
     private var rollups: [DailyUsageRollup] {
-        guard let activeService else { return [] }
-        return UsageHistoryStore.shared.dailyRollups(service: activeService, days: rangeDays)
+        guard let account = manager.account(of: activeService) else { return [] }
+        return UsageHistoryStore.shared.dailyRollups(account: account, days: rangeDays)
     }
 
     var body: some View {

@@ -1,5 +1,6 @@
 import Foundation
 import Security
+import CryptoKit
 
 struct ModelLimit {
     let name: String
@@ -39,6 +40,7 @@ struct UsageData {
 struct ClaudeProfile: Identifiable {
     let service: String        // Keychain service name
     var label: String          // account email once known, else a fallback
+    var email: String?         // account of the item's current login, once known
     var usage: UsageData?
     var error: String?
     var id: String { service }
@@ -59,6 +61,34 @@ enum ClaudeCredentialParser {
             throw KeychainError.missingOAuthToken(availableKeys: "claudeAiOauth")
         }
         return token
+    }
+}
+
+/// Account emails resolved for Keychain items. A login can change in place:
+/// `/login` as another account in that config dir, or a tool that moves
+/// logins between items. So an email holds only for the token it was
+/// resolved with, and a new token is resolved again.
+struct AccountNames {
+    private var resolved: [String: (token: SHA256.Digest, email: String)] = [:]
+
+    /// The email resolved for this item's current token, or nil to resolve it
+    func email(service: String, token: String) -> String? {
+        guard let entry = resolved[service], entry.token == Self.digest(token) else { return nil }
+        return entry.email
+    }
+
+    /// The last email resolved for this item, to show while its login cannot be read
+    func lastEmail(service: String) -> String? {
+        resolved[service]?.email
+    }
+
+    mutating func remember(service: String, token: String, email: String) {
+        resolved[service] = (Self.digest(token), email)
+    }
+
+    /// Only a digest is kept, never the token
+    private static func digest(_ token: String) -> SHA256.Digest {
+        SHA256.hash(data: Data(token.utf8))
     }
 }
 
@@ -84,9 +114,9 @@ struct ProfileUsageHistory: Codable {
     var rollups: [DailyUsageRollup] = []
 }
 
-/// Local usage history, 30 days per profile, in Application Support.
-/// Powers the sparklines, burn-rate forecast and weekly-peaks summary
-/// (issue #16). Everything stays on this machine.
+/// Local usage history, 30 days per account (its email), in Application
+/// Support. Powers the sparklines, burn-rate forecast and weekly-peaks
+/// summary (issue #16). Everything stays on this machine.
 @MainActor
 final class UsageHistoryStore {
     static let shared = UsageHistoryStore()
@@ -140,8 +170,8 @@ final class UsageHistoryStore {
         }.sorted { $0.day < $1.day }
     }
 
-    func record(service: String, usage: UsageData) {
-        var history = data[service] ?? ProfileUsageHistory()
+    func record(account: String, usage: UsageData) {
+        var history = data[account] ?? ProfileUsageHistory()
         let model = usage.modelLimits.map(\.utilization).max()
         history.snapshots.append(UsageSnapshot(ts: Date(),
                                                session: usage.sessionUtilization,
@@ -150,21 +180,43 @@ final class UsageHistoryStore {
         history.snapshots.removeAll { $0.ts < Date().addingTimeInterval(-Self.retentionDays * 86_400) }
 
         // Fold this reading into today's rollup, which outlives the snapshots
-        let today = Calendar.current.startOfDay(for: Date())
-        if let index = history.rollups.firstIndex(where: { $0.day == today }) {
-            history.rollups[index].peakSession = max(history.rollups[index].peakSession, usage.sessionUtilization)
-            history.rollups[index].peakWeekly = max(history.rollups[index].peakWeekly, usage.weeklyUtilization)
-            history.rollups[index].peakModel = [history.rollups[index].peakModel, model].compactMap { $0 }.max()
-        } else {
-            history.rollups.append(DailyUsageRollup(day: today,
-                                                    peakSession: usage.sessionUtilization,
-                                                    peakWeekly: usage.weeklyUtilization,
-                                                    peakModel: model))
-            history.rollups.sort { $0.day < $1.day }
-        }
+        Self.fold(DailyUsageRollup(day: Calendar.current.startOfDay(for: Date()),
+                                   peakSession: usage.sessionUtilization,
+                                   peakWeekly: usage.weeklyUtilization,
+                                   peakModel: model),
+                  into: &history.rollups)
         history.rollups.removeAll { $0.day < Date().addingTimeInterval(-Self.rollupRetentionDays * 86_400) }
-        data[service] = history
+        data[account] = history
+        save()
+    }
 
+    /// History was once kept per Keychain item, so an item whose login changed
+    /// account mixed both. The first time an item's account is known, its old
+    /// history moves to that account, merged with any already there.
+    func adoptItemHistory(service: String, account: String) {
+        guard let old = data.removeValue(forKey: service) else { return }
+        var history = data[account] ?? ProfileUsageHistory()
+        history.snapshots = (history.snapshots + old.snapshots).sorted { $0.ts < $1.ts }
+        for rollup in old.rollups {
+            Self.fold(rollup, into: &history.rollups)
+        }
+        data[account] = history
+        save()
+    }
+
+    /// Keep the higher peaks of a day already there, else add the day in order
+    private static func fold(_ rollup: DailyUsageRollup, into rollups: inout [DailyUsageRollup]) {
+        if let index = rollups.firstIndex(where: { $0.day == rollup.day }) {
+            rollups[index].peakSession = max(rollups[index].peakSession, rollup.peakSession)
+            rollups[index].peakWeekly = max(rollups[index].peakWeekly, rollup.peakWeekly)
+            rollups[index].peakModel = [rollups[index].peakModel, rollup.peakModel].compactMap { $0 }.max()
+        } else {
+            rollups.append(rollup)
+            rollups.sort { $0.day < $1.day }
+        }
+    }
+
+    private func save() {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .secondsSince1970
         if let out = try? encoder.encode(data) {
@@ -173,15 +225,15 @@ final class UsageHistoryStore {
     }
 
     /// Daily peaks for the History window, oldest first
-    func dailyRollups(service: String, days: Int) -> [DailyUsageRollup] {
+    func dailyRollups(account: String, days: Int) -> [DailyUsageRollup] {
         let cutoff = Calendar.current.startOfDay(for: Date()).addingTimeInterval(-Double(days) * 86_400)
-        return (data[service]?.rollups ?? []).filter { $0.day >= cutoff }
+        return (data[account]?.rollups ?? []).filter { $0.day >= cutoff }
     }
 
     /// Values for a sparkline covering the last `hours`, downsampled for drawing
-    func series(service: String, hours: Double, keyPath: KeyPath<UsageSnapshot, Double>, maxPoints: Int = 160) -> [Double] {
+    func series(account: String, hours: Double, keyPath: KeyPath<UsageSnapshot, Double>, maxPoints: Int = 160) -> [Double] {
         let cutoff = Date().addingTimeInterval(-hours * 3600)
-        let values = (data[service]?.snapshots ?? []).filter { $0.ts > cutoff }.map { $0[keyPath: keyPath] }
+        let values = (data[account]?.snapshots ?? []).filter { $0.ts > cutoff }.map { $0[keyPath: keyPath] }
         guard values.count > maxPoints else { return values }
         let step = Double(values.count) / Double(maxPoints)
         return (0..<maxPoints).map { values[Int(Double($0) * step)] }
@@ -189,9 +241,9 @@ final class UsageHistoryStore {
 
     /// "On pace to hit 100% Thu 19:00" — only when the recent burn rate
     /// actually crosses 100% before the weekly reset
-    func weeklyForecast(service: String, current: UsageData) -> String? {
+    func weeklyForecast(account: String, current: UsageData) -> String? {
         guard let resetsAt = current.weeklyResetsAt else { return nil }
-        let recent = (data[service]?.snapshots ?? []).filter { $0.ts > Date().addingTimeInterval(-86_400) }
+        let recent = (data[account]?.snapshots ?? []).filter { $0.ts > Date().addingTimeInterval(-86_400) }
 
         // Use only the run since the last reset (a drop of >5 points means reset)
         var run: [UsageSnapshot] = []
@@ -215,10 +267,10 @@ final class UsageHistoryStore {
 
     /// "Past 4 weeks peaked at 62% avg" — the upgrade/downgrade answer.
     /// Appears once at least two full past weeks of history exist.
-    func weeklyPeaks(service: String) -> String? {
+    func weeklyPeaks(account: String) -> String? {
         let calendar = Calendar.current
         let thisWeek = calendar.dateInterval(of: .weekOfYear, for: Date())?.start
-        let byWeek = Dictionary(grouping: data[service]?.snapshots ?? []) {
+        let byWeek = Dictionary(grouping: data[account]?.snapshots ?? []) {
             calendar.dateInterval(of: .weekOfYear, for: $0.ts)?.start ?? $0.ts
         }
         let pastPeaks = byWeek.filter { $0.key != thisWeek }
@@ -246,8 +298,8 @@ class UsageManager: ObservableObject {
     @Published private(set) var selectedProfileService: String? =
         UserDefaults.standard.string(forKey: "selectedProfileService")
 
-    /// Email labels already resolved this run, keyed by Keychain service
-    private var profileLabels: [String: String] = [:]
+    /// Account emails resolved this run, per Keychain item and token
+    private var accountNames = AccountNames()
 
     static let currentVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
     static let githubRepo = "richhickson/claudecodeusage"
@@ -302,27 +354,33 @@ class UsageManager: ObservableObject {
         let services = await Task.detached { Self.discoverKeychainServices(preferred: preferred) }.value
 
         var newProfiles: [ClaudeProfile] = []
+        var recorded = Set<String>()   // one reading per account, however many items hold it
         for service in services {
-            var profile = ClaudeProfile(service: service,
-                                        label: profileLabels[service] ?? Self.fallbackLabel(service))
+            var profile = ClaudeProfile(service: service, label: Self.fallbackLabel(service))
             do {
                 guard let token = try await getClaudeCodeTokenWithRetry(service: service) else {
                     // MCP-only stores remain untouched in Keychain.
                     continue
                 }
+                profile.email = accountNames.email(service: service, token: token)
                 profile.usage = try await fetchUsageWithRetry(token: token)
-                if profileLabels[service] == nil,
-                   let email = await fetchProfileEmail(token: token) {
-                    profileLabels[service] = email
-                    profile.label = email
+                if profile.email == nil, let email = await fetchProfileEmail(token: token) {
+                    accountNames.remember(service: service, token: token, email: email)
+                    profile.email = email
                 }
             } catch let keychainError as KeychainError {
+                // eg a locked keychain: nothing shows the login changed, so its last name stands
+                profile.label = accountNames.lastEmail(service: service) ?? profile.label
                 profile.error = keychainError.localizedDescription
             } catch {
                 profile.error = error.localizedDescription
             }
-            if let fetched = profile.usage {
-                UsageHistoryStore.shared.record(service: service, usage: fetched)
+            if let email = profile.email {
+                profile.label = email
+                UsageHistoryStore.shared.adoptItemHistory(service: service, account: email)
+                if let fetched = profile.usage, recorded.insert(email).inserted {
+                    UsageHistoryStore.shared.record(account: email, usage: fetched)
+                }
             }
             newProfiles.append(profile)
         }
@@ -335,28 +393,33 @@ class UsageManager: ObservableObject {
         lastUpdated = Date()
     }
 
-    // MARK: History (issue #16) — all for the selected profile
+    // MARK: History (issue #16) — all for the selected profile's account
+
+    /// The account an item's login belongs to, once known: its history is kept under it
+    func account(of service: String?) -> String? {
+        profiles.first { $0.service == service }?.email
+    }
 
     /// Session sparkline: last 24 hours
     var sessionHistory: [Double] {
-        guard let service = selectedProfileService else { return [] }
-        return UsageHistoryStore.shared.series(service: service, hours: 24, keyPath: \.session)
+        guard let account = account(of: selectedProfileService) else { return [] }
+        return UsageHistoryStore.shared.series(account: account, hours: 24, keyPath: \.session)
     }
 
     /// Weekly sparkline: last 7 days
     var weeklyHistory: [Double] {
-        guard let service = selectedProfileService else { return [] }
-        return UsageHistoryStore.shared.series(service: service, hours: 7 * 24, keyPath: \.weekly)
+        guard let account = account(of: selectedProfileService) else { return [] }
+        return UsageHistoryStore.shared.series(account: account, hours: 7 * 24, keyPath: \.weekly)
     }
 
     var weeklyForecast: String? {
-        guard let service = selectedProfileService, let usage else { return nil }
-        return UsageHistoryStore.shared.weeklyForecast(service: service, current: usage)
+        guard let account = account(of: selectedProfileService), let usage else { return nil }
+        return UsageHistoryStore.shared.weeklyForecast(account: account, current: usage)
     }
 
     var weeklyPeaks: String? {
-        guard let service = selectedProfileService else { return nil }
-        return UsageHistoryStore.shared.weeklyPeaks(service: service)
+        guard let account = account(of: selectedProfileService) else { return nil }
+        return UsageHistoryStore.shared.weeklyPeaks(account: account)
     }
 
     /// Switch the popover and menu bar to another profile (no refetch needed)
